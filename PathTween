@@ -1,0 +1,348 @@
+local PathTween = {}
+PathTween.__index = PathTween
+
+local RunService = game:GetService("RunService")
+
+function PathTween.new()
+	local self = setmetatable({}, PathTween)
+	
+	self.Points = {}
+	self.Speed = 10
+	self.CurrentProgress = 0
+	self.TotalLength = 0
+	self.IsMoving = false
+	self.TargetObject = nil
+	self.Connection = nil
+	
+	self.BeamFolder = nil
+	self.BeamParts = {}
+	self.BeamAttachments = {}
+	self.Beams = {}
+	self.BeamColor = Color3.new(0, 1, 1)
+	self.BeamWidth = 0.3
+	self.BeamTransparency = 0
+	self.BeamEnabled = false
+	
+	self.OnProgressChanged = nil
+	self.OnCompleted = nil
+	self.OnPointReached = nil
+	
+	return self
+end
+
+function PathTween:AddPoint(cframe)
+	assert(typeof(cframe) == "CFrame", "O ponto deve ser um CFrame")
+	table.insert(self.Points, cframe)
+	self:RecalculateLength()
+	if self.BeamEnabled then self:UpdateBeam() end
+	return self
+end
+
+function PathTween:AddPoints(cframes)
+	for _, cframe in ipairs(cframes) do
+		table.insert(self.Points, cframe)
+	end
+	self:RecalculateLength()
+	if self.BeamEnabled then self:UpdateBeam() end
+	return self
+end
+
+function PathTween:RemovePoint(index)
+	if self.Points[index] then
+		table.remove(self.Points, index)
+		self:RecalculateLength()
+		if self.BeamEnabled then self:UpdateBeam() end
+	end
+	return self
+end
+
+function PathTween:ClearPoints()
+	self.Points = {}
+	self.TotalLength = 0
+	self.CurrentProgress = 0
+	if self.BeamEnabled then self:UpdateBeam() end
+	return self
+end
+
+function PathTween:SetSpeed(speed)
+	assert(type(speed) == "number" and speed > 0, "Velocidade deve ser um número positivo")
+	self.Speed = speed
+	return self
+end
+
+function PathTween:RecalculateLength()
+	self.TotalLength = 0
+	for i = 1, #self.Points - 1 do
+		local distance = (self.Points[i + 1].Position - self.Points[i].Position).Magnitude
+		self.TotalLength = self.TotalLength + distance
+	end
+end
+
+function PathTween:GetCFrameAtProgress(progress)
+	if #self.Points < 2 then
+		return self.Points[1] or CFrame.new()
+	end
+	
+	progress = math.clamp(progress, 0, self.TotalLength)
+	local accumulatedLength = 0
+	
+	for i = 1, #self.Points - 1 do
+		local startPoint = self.Points[i]
+		local endPoint = self.Points[i + 1]
+		local segmentLength = (endPoint.Position - startPoint.Position).Magnitude
+		
+		if progress <= accumulatedLength + segmentLength then
+			local segmentProgress = (progress - accumulatedLength) / segmentLength
+			return startPoint:Lerp(endPoint, segmentProgress)
+		end
+		
+		accumulatedLength = accumulatedLength + segmentLength
+	end
+	
+	return self.Points[#self.Points]
+end
+
+function PathTween:CreateBeam(color, width, transparency)
+	self.BeamColor = color or self.BeamColor
+	self.BeamWidth = width or self.BeamWidth
+	self.BeamTransparency = transparency or self.BeamTransparency
+	self.BeamEnabled = true
+	
+	if not self.BeamFolder then
+		self.BeamFolder = Instance.new("Folder")
+		self.BeamFolder.Name = "PathTweenBeam"
+		self.BeamFolder.Parent = workspace
+	end
+	
+	self:UpdateBeam()
+	return self
+end
+
+function PathTween:UpdateBeam()
+	self:ClearBeam()
+	
+	if not self.BeamEnabled or #self.Points < 2 then
+		return
+	end
+	
+	for i = 1, #self.Points - 1 do
+		local startPos = self.Points[i].Position
+		local endPos = self.Points[i + 1].Position
+		
+		local startPart = Instance.new("Part")
+		startPart.Anchored = true
+		startPart.CanCollide = false
+		startPart.Transparency = 1
+		startPart.Size = Vector3.new(0.1, 0.1, 0.1)
+		startPart.CFrame = CFrame.new(startPos)
+		startPart.Parent = self.BeamFolder
+		
+		local endPart = Instance.new("Part")
+		endPart.Anchored = true
+		endPart.CanCollide = false
+		endPart.Transparency = 1
+		endPart.Size = Vector3.new(0.1, 0.1, 0.1)
+		endPart.CFrame = CFrame.new(endPos)
+		endPart.Parent = self.BeamFolder
+		
+		local att0 = Instance.new("Attachment")
+		att0.Parent = startPart
+		
+		local att1 = Instance.new("Attachment")
+		att1.Parent = endPart
+		
+		local beam = Instance.new("Beam")
+		beam.Attachment0 = att0
+		beam.Attachment1 = att1
+		beam.Color = ColorSequence.new(self.BeamColor)
+		beam.Width0 = self.BeamWidth
+		beam.Width1 = self.BeamWidth
+		beam.Transparency = NumberSequence.new(self.BeamTransparency)
+		beam.FaceCamera = true
+		beam.Parent = startPart
+		
+		table.insert(self.BeamParts, startPart)
+		table.insert(self.BeamParts, endPart)
+		table.insert(self.Beams, beam)
+	end
+end
+
+function PathTween:ClearBeam()
+	for _, part in ipairs(self.BeamParts) do
+		if part then part:Destroy() end
+	end
+	self.BeamParts = {}
+	self.Beams = {}
+end
+
+function PathTween:DisableBeam()
+	self.BeamEnabled = false
+	self:ClearBeam()
+	if self.BeamFolder then
+		self.BeamFolder:Destroy()
+		self.BeamFolder = nil
+	end
+	return self
+end
+
+function PathTween:SetBeamColor(color)
+	self.BeamColor = color
+	for _, beam in ipairs(self.Beams) do
+		if beam then beam.Color = ColorSequence.new(color) end
+	end
+	return self
+end
+
+function PathTween:SetBeamWidth(width)
+	self.BeamWidth = width
+	for _, beam in ipairs(self.Beams) do
+		if beam then
+			beam.Width0 = width
+			beam.Width1 = width
+		end
+	end
+	return self
+end
+
+function PathTween:SetBeamTransparency(transparency)
+	self.BeamTransparency = transparency
+	for _, beam in ipairs(self.Beams) do
+		if beam then beam.Transparency = NumberSequence.new(transparency) end
+	end
+	return self
+end
+
+function PathTween:Start(object, startFromBeginning)
+	assert(object and (object:IsA("BasePart") or object:IsA("Model")), "Objeto deve ser uma Part ou Model")
+	assert(#self.Points >= 2, "É necessário pelo menos 2 pontos para iniciar o caminho")
+	
+	self.TargetObject = object
+	self.IsMoving = true
+	
+	if startFromBeginning ~= false then
+		self.CurrentProgress = 0
+	end
+	
+	if self.Connection then
+		self.Connection:Disconnect()
+	end
+	
+	local lastPointIndex = 0
+	
+	self.Connection = RunService.Heartbeat:Connect(function(deltaTime)
+		if not self.IsMoving then return end
+		
+		self.CurrentProgress = self.CurrentProgress + (self.Speed * deltaTime)
+		
+		if self.CurrentProgress >= self.TotalLength then
+			self.CurrentProgress = self.TotalLength
+			self:Stop()
+			if self.OnCompleted then self.OnCompleted() end
+			return
+		end
+		
+		local newCFrame = self:GetCFrameAtProgress(self.CurrentProgress)
+		
+		if object:IsA("Model") then
+			if object.PrimaryPart then
+				object:SetPrimaryPartCFrame(newCFrame)
+			else
+				warn("Model não tem PrimaryPart definida!")
+			end
+		else
+			object.CFrame = newCFrame
+		end
+		
+		if self.OnProgressChanged then
+			self.OnProgressChanged(self.CurrentProgress, self.TotalLength)
+		end
+		
+		local currentPointIndex = self:GetCurrentPointIndex()
+		if currentPointIndex > lastPointIndex then
+			lastPointIndex = currentPointIndex
+			if self.OnPointReached then
+				self.OnPointReached(currentPointIndex, self.Points[currentPointIndex])
+			end
+		end
+	end)
+	
+	return self
+end
+
+function PathTween:GetCurrentPointIndex()
+	local accumulatedLength = 0
+	for i = 1, #self.Points - 1 do
+		local segmentLength = (self.Points[i + 1].Position - self.Points[i].Position).Magnitude
+		if self.CurrentProgress <= accumulatedLength + segmentLength then
+			return i
+		end
+		accumulatedLength = accumulatedLength + segmentLength
+	end
+	return #self.Points
+end
+
+function PathTween:Pause()
+	self.IsMoving = false
+	return self
+end
+
+function PathTween:Resume()
+	if not self.IsMoving and self.CurrentProgress < self.TotalLength then
+		self.IsMoving = true
+	end
+	return self
+end
+
+function PathTween:Stop()
+	self.IsMoving = false
+	if self.Connection then
+		self.Connection:Disconnect()
+		self.Connection = nil
+	end
+	return self
+end
+
+function PathTween:Reset()
+	self:Stop()
+	self.CurrentProgress = 0
+	return self
+end
+
+function PathTween:SetProgress(progress)
+	self.CurrentProgress = math.clamp(progress, 0, self.TotalLength)
+	if self.TargetObject then
+		local newCFrame = self:GetCFrameAtProgress(self.CurrentProgress)
+		if self.TargetObject:IsA("Model") then
+			if self.TargetObject.PrimaryPart then
+				self.TargetObject:SetPrimaryPartCFrame(newCFrame)
+			end
+		else
+			self.TargetObject.CFrame = newCFrame
+		end
+	end
+	return self
+end
+
+function PathTween:GetInfo()
+	return {
+		IsMoving = self.IsMoving,
+		CurrentProgress = self.CurrentProgress,
+		TotalLength = self.TotalLength,
+		ProgressPercent = (self.TotalLength > 0) and (self.CurrentProgress / self.TotalLength * 100) or 0,
+		Speed = self.Speed,
+		PointCount = #self.Points,
+		CurrentPointIndex = self:GetCurrentPointIndex()
+	}
+end
+
+function PathTween:Destroy()
+	self:Stop()
+	self:DisableBeam()
+	self.Points = nil
+	self.TargetObject = nil
+	self.OnProgressChanged = nil
+	self.OnCompleted = nil
+	self.OnPointReached = nil
+end
+
+return PathTween
