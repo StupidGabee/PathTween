@@ -1,4 +1,4 @@
--- [[ Version 0.05 ]] --
+-- [[ Version 0.06 ]] --
 
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -16,6 +16,7 @@ function EasyPath.new(character)
 	self.Waypoints = {}
 	self.Speed = 16
 	self.Running = false
+	self.Paused = false
 	self.Index = 1
 
 	self.UseGradient = false
@@ -30,6 +31,8 @@ function EasyPath.new(character)
 	
 	self.SmoothDestroyDuration = 1.5
 	self.AutoDestroy = true
+	self.PauseOnReach = false
+	self.OnWaypointReached = nil
 
 	self.Visuals = {}
 	self.Folder = Instance.new("Folder")
@@ -37,6 +40,11 @@ function EasyPath.new(character)
 	self.Folder.Parent = workspace
 
 	self._hb = nil
+	self._diedConnection = nil
+	
+	self._diedConnection = self.Humanoid.Died:Connect(function()
+		self:Destroy()
+	end)
 
 	return self
 end
@@ -57,6 +65,19 @@ function EasyPath:SetGradient(enabled, colors)
 		self.GradientColors = colors
 	end
 	self:RefreshVisuals()
+end
+
+function EasyPath:SetPauseOnReach(enabled, callback)
+	self.PauseOnReach = enabled
+	self.OnWaypointReached = callback
+end
+
+function EasyPath:Pause()
+	self.Paused = true
+end
+
+function EasyPath:Resume()
+	self.Paused = false
 end
 
 function EasyPath:_createGradientSequence()
@@ -165,6 +186,7 @@ function EasyPath:Run()
 	if #self.Waypoints == 0 then return end
 
 	self.Running = true
+	self.Paused = false
 	self.Index = 1
 
 	self.Root.Anchored = true
@@ -185,6 +207,12 @@ function EasyPath:Run()
 			local target = self.Waypoints[self.Index]
 
 			while self.Running do
+				while self.Paused and self.Running do
+					task.wait()
+				end
+				
+				if not self.Running then break end
+				
 				local pos = self.Root.Position
 				local tpos = target.Position
 				local delta = tpos - pos
@@ -219,6 +247,13 @@ function EasyPath:Run()
 				end
 			end
 
+			if self.PauseOnReach then
+				self.Paused = true
+				if self.OnWaypointReached then
+					task.spawn(self.OnWaypointReached, self.Index, self)
+				end
+			end
+
 			self.Index += 1
 		end
 
@@ -232,6 +267,7 @@ end
 
 function EasyPath:Stop()
 	self.Running = false
+	self.Paused = false
 
 	if self._hb then
 		self._hb:Disconnect()
@@ -259,14 +295,27 @@ function EasyPath:SmoothDestroy()
 	
 	local tweenInfo = TweenInfo.new(
 		duration,
-		Enum.EasingStyle.Quad,
-		Enum.EasingDirection.Out
+		Enum.EasingStyle.Sine,
+		Enum.EasingDirection.InOut
 	)
 	
+	local remainingVisuals = {}
 	for _, visual in ipairs(self.Visuals) do
 		if visual.beam and visual.beam.Parent then
-			TweenService:Create(visual.beam, tweenInfo, {Width0 = 0, Width1 = 0}):Play()
+			table.insert(remainingVisuals, visual)
 		end
+	end
+	
+	local step = duration / math.max(#remainingVisuals, 1)
+	
+	for i, visual in ipairs(remainingVisuals) do
+		task.spawn(function()
+			task.wait((i - 1) * step * 0.5)
+			if visual.beam and visual.beam.Parent then
+				local tween = TweenService:Create(visual.beam, tweenInfo, {Width0 = 0, Width1 = 0})
+				tween:Play()
+			end
+		end)
 	end
 	
 	task.wait(duration)
@@ -276,6 +325,12 @@ end
 
 function EasyPath:Destroy()
 	self:Stop()
+	
+	if self._diedConnection then
+		self._diedConnection:Disconnect()
+		self._diedConnection = nil
+	end
+	
 	self:ClearVisuals()
 	if self.Folder then
 		self.Folder:Destroy()
