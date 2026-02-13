@@ -1,4 +1,4 @@
--- [[ Version 0.04 ]] --
+-- [[ Version 0.05 ]] --
 
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -152,7 +152,8 @@ function EasyPath:RefreshVisuals()
 		table.insert(self.Visuals, {
 			p = nodes[i].p,
 			next = nodes[i+1].p,
-			beam = beam
+			beam = beam,
+			index = i
 		})
 	end
 
@@ -174,7 +175,7 @@ function EasyPath:Run()
 	end
 
 	self._hb = RunService.Heartbeat:Connect(function()
-		if self._firstNode then
+		if self._firstNode and self.Index == 1 then
 			self._firstNode.CFrame = self.Root.CFrame
 		end
 	end)
@@ -203,6 +204,18 @@ function EasyPath:Run()
 					local dir = delta / dist
 					local newPos = pos + dir * step
 					self.Root.CFrame = CFrame.new(newPos, newPos + self.Root.CFrame.LookVector)
+				end
+			end
+
+			for _, visual in ipairs(self.Visuals) do
+				if visual.index == self.Index then
+					if visual.beam then
+						visual.beam:Destroy()
+					end
+					if visual.p then
+						visual.p:Destroy()
+					end
+					break
 				end
 			end
 
@@ -251,7 +264,7 @@ function EasyPath:SmoothDestroy()
 	)
 	
 	for _, visual in ipairs(self.Visuals) do
-		if visual.beam then
+		if visual.beam and visual.beam.Parent then
 			TweenService:Create(visual.beam, tweenInfo, {Width0 = 0, Width1 = 0}):Play()
 		end
 	end
