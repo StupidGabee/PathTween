@@ -1,4 +1,4 @@
--- [[ Version 0.003 ]] --
+-- [[ Version 0.004 ]] --
 
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -242,6 +242,8 @@ function EasyPath:SmoothDestroy()
 		self._hb = nil
 	end
 	
+	self._firstNode = nil
+	
 	local tweenInfo = TweenInfo.new(
 		duration,
 		Enum.EasingStyle.Quad,
@@ -250,16 +252,7 @@ function EasyPath:SmoothDestroy()
 	
 	for _, visual in ipairs(self.Visuals) do
 		if visual.beam then
-			local tween = TweenService:Create(
-				visual.beam,
-				tweenInfo,
-				{
-					Width0 = 0,
-					Width1 = 0,
-					Transparency = NumberSequence.new(1)
-				}
-			)
-			tween:Play()
+			TweenService:Create(visual.beam, tweenInfo, {Width0 = 0, Width1 = 0}):Play()
 		end
 	end
 	
