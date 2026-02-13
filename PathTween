@@ -1,4 +1,7 @@
+-- [[ Version: 0.002 ]] --
+
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local EasyPath = {}
 EasyPath.__index = EasyPath
@@ -15,8 +18,18 @@ function EasyPath.new(character)
 	self.Running = false
 	self.Index = 1
 
+	self.UseGradient = false
+	self.GradientColors = {
+		Color3.fromRGB(255, 0, 100),
+		Color3.fromRGB(0, 200, 255),
+		Color3.fromRGB(100, 255, 0)
+	}
+	
 	self.Color = Color3.fromRGB(0,255,255)
 	self.Width = 0.3
+	
+	self.SmoothDestroyDuration = 1.5
+	self.AutoDestroy = true
 
 	self.Visuals = {}
 	self.Folder = Instance.new("Folder")
@@ -32,10 +45,30 @@ function EasyPath:SetSpeed(v)
 	self.Speed = v
 end
 
-function EasyPath:SetVisuals(color,width)
+function EasyPath:SetVisuals(color, width)
 	if color then self.Color = color end
 	if width then self.Width = width end
 	self:RefreshVisuals()
+end
+
+function EasyPath:SetGradient(enabled, colors)
+	self.UseGradient = enabled
+	if colors then
+		self.GradientColors = colors
+	end
+	self:RefreshVisuals()
+end
+
+function EasyPath:_createGradientSequence()
+	local keypoints = {}
+	local numColors = #self.GradientColors
+	
+	for i, color in ipairs(self.GradientColors) do
+		local time = (i - 1) / (numColors - 1)
+		table.insert(keypoints, ColorSequenceKeypoint.new(time, color))
+	end
+	
+	return ColorSequence.new(keypoints)
 end
 
 function EasyPath:AddPoint(cf)
@@ -65,19 +98,29 @@ function EasyPath:_newNode(cf)
 	p.CFrame = cf
 	p.Parent = self.Folder
 
-	local a = Instance.new("Attachment",p)
+	local a = Instance.new("Attachment", p)
 
-	return p,a
+	return p, a
 end
 
-function EasyPath:_newBeam(a0,a1)
+function EasyPath:_newBeam(a0, a1, segmentIndex, totalSegments)
 	local b = Instance.new("Beam")
 	b.Attachment0 = a0
 	b.Attachment1 = a1
 	b.FaceCamera = true
 	b.Width0 = self.Width
 	b.Width1 = self.Width
-	b.Color = ColorSequence.new(self.Color)
+	
+	if self.UseGradient then
+		b.Color = self:_createGradientSequence()
+	else
+		b.Color = ColorSequence.new(self.Color)
+	end
+	
+	b.Transparency = NumberSequence.new(0)
+	b.LightEmission = 1
+	b.LightInfluence = 0
+	
 	b.Parent = self.Folder
 	return b
 end
@@ -91,17 +134,19 @@ function EasyPath:RefreshVisuals()
 
 	local nodes = {}
 
-	local p0,a0 = self:_newNode(self.Root.CFrame)
-	table.insert(nodes,{p=p0,a=a0})
+	local p0, a0 = self:_newNode(self.Root.CFrame)
+	table.insert(nodes, {p=p0, a=a0})
 
-	for i,cf in ipairs(self.Waypoints) do
-		local p,a = self:_newNode(cf)
-		table.insert(nodes,{p=p,a=a})
+	for i, cf in ipairs(self.Waypoints) do
+		local p, a = self:_newNode(cf)
+		table.insert(nodes, {p=p, a=a})
 	end
 
-	for i=1,#nodes-1 do
-		local beam = self:_newBeam(nodes[i].a,nodes[i+1].a)
-		table.insert(self.Visuals,{
+	local totalSegments = #nodes - 1
+	
+	for i = 1, totalSegments do
+		local beam = self:_newBeam(nodes[i].a, nodes[i+1].a, i, totalSegments)
+		table.insert(self.Visuals, {
 			p = nodes[i].p,
 			next = nodes[i+1].p,
 			beam = beam
@@ -162,6 +207,10 @@ function EasyPath:Run()
 		end
 
 		self:Stop()
+		
+		if self.AutoDestroy then
+			self:SmoothDestroy()
+		end
 	end)
 end
 
@@ -180,6 +229,30 @@ function EasyPath:Stop()
 	if self.Humanoid then
 		self.Humanoid.PlatformStand = false
 	end
+end
+
+function EasyPath:SmoothDestroy()
+	local duration = self.SmoothDestroyDuration
+	local tweenInfo = TweenInfo.new(
+		duration,
+		Enum.EasingStyle.Quad,
+		Enum.EasingDirection.Out
+	)
+	
+	for _, visual in ipairs(self.Visuals) do
+		if visual.beam then
+			local tween = TweenService:Create(
+				visual.beam,
+				tweenInfo,
+				{Transparency = NumberSequence.new(1)}
+			)
+			tween:Play()
+		end
+	end
+	
+	task.wait(duration)
+	
+	self:Destroy()
 end
 
 function EasyPath:Destroy()
