@@ -1,4 +1,4 @@
--- [[ Version 0.06 ]] --
+-- [[ Version 0.07 ]] --
 
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -19,16 +19,19 @@ function EasyPath.new(character)
 	self.Paused = false
 	self.Index = 1
 
+	self.EasingStyle = Enum.EasingStyle.Linear
+	self.EasingDirection = Enum.EasingDirection.InOut
+
 	self.UseGradient = false
 	self.GradientColors = {
 		Color3.fromRGB(255, 0, 100),
 		Color3.fromRGB(0, 200, 255),
 		Color3.fromRGB(100, 255, 0)
 	}
-	
-	self.Color = Color3.fromRGB(0,255,255)
+
+	self.Color = Color3.fromRGB(0, 255, 255)
 	self.Width = 0.3
-	
+
 	self.SmoothDestroyDuration = 1.5
 	self.AutoDestroy = true
 	self.PauseOnReach = false
@@ -40,8 +43,9 @@ function EasyPath.new(character)
 	self.Folder.Parent = workspace
 
 	self._hb = nil
+	self._currentTween = nil
 	self._diedConnection = nil
-	
+
 	self._diedConnection = self.Humanoid.Died:Connect(function()
 		self:Destroy()
 	end)
@@ -51,6 +55,11 @@ end
 
 function EasyPath:SetSpeed(v)
 	self.Speed = v
+end
+
+function EasyPath:SetEasing(style, direction)
+	if style then self.EasingStyle = style end
+	if direction then self.EasingDirection = direction end
 end
 
 function EasyPath:SetVisuals(color, width)
@@ -74,21 +83,27 @@ end
 
 function EasyPath:Pause()
 	self.Paused = true
+	if self._currentTween then
+		self._currentTween:Pause()
+	end
 end
 
 function EasyPath:Resume()
 	self.Paused = false
+	if self._currentTween then
+		self._currentTween:Play()
+	end
 end
 
 function EasyPath:_createGradientSequence()
 	local keypoints = {}
 	local numColors = #self.GradientColors
-	
+
 	for i, color in ipairs(self.GradientColors) do
 		local time = (i - 1) / (numColors - 1)
 		table.insert(keypoints, ColorSequenceKeypoint.new(time, color))
 	end
-	
+
 	return ColorSequence.new(keypoints)
 end
 
@@ -104,7 +119,7 @@ function EasyPath:ClearPoints()
 end
 
 function EasyPath:ClearVisuals()
-	for _,v in ipairs(self.Visuals) do
+	for _, v in ipairs(self.Visuals) do
 		if v.p then
 			v.p:Destroy()
 		end
@@ -134,17 +149,17 @@ function EasyPath:_newBeam(a0, a1, segmentIndex, totalSegments)
 	b.FaceCamera = true
 	b.Width0 = self.Width
 	b.Width1 = self.Width
-	
+
 	if self.UseGradient then
 		b.Color = self:_createGradientSequence()
 	else
 		b.Color = ColorSequence.new(self.Color)
 	end
-	
+
 	b.Transparency = NumberSequence.new(0)
 	b.LightEmission = 1
 	b.LightInfluence = 0
-	
+
 	b.Parent = self.Folder
 	return b
 end
@@ -159,20 +174,20 @@ function EasyPath:RefreshVisuals()
 	local nodes = {}
 
 	local p0, a0 = self:_newNode(self.Root.CFrame)
-	table.insert(nodes, {p=p0, a=a0})
+	table.insert(nodes, { p = p0, a = a0 })
 
 	for i, cf in ipairs(self.Waypoints) do
 		local p, a = self:_newNode(cf)
-		table.insert(nodes, {p=p, a=a})
+		table.insert(nodes, { p = p, a = a })
 	end
 
 	local totalSegments = #nodes - 1
-	
+
 	for i = 1, totalSegments do
-		local beam = self:_newBeam(nodes[i].a, nodes[i+1].a, i, totalSegments)
+		local beam = self:_newBeam(nodes[i].a, nodes[i + 1].a, i, totalSegments)
 		table.insert(self.Visuals, {
 			p = nodes[i].p,
-			next = nodes[i+1].p,
+			next = nodes[i + 1].p,
 			beam = beam,
 			index = i
 		})
@@ -192,6 +207,7 @@ function EasyPath:Run()
 	self.Root.Anchored = true
 	self.Humanoid.PlatformStand = true
 
+	-- Keep first visual node glued to root while stationary
 	if self._hb then
 		self._hb:Disconnect()
 	end
@@ -206,35 +222,26 @@ function EasyPath:Run()
 		while self.Running and self.Index <= #self.Waypoints do
 			local target = self.Waypoints[self.Index]
 
-			while self.Running do
-				while self.Paused and self.Running do
-					task.wait()
-				end
-				
-				if not self.Running then break end
-				
-				local pos = self.Root.Position
-				local tpos = target.Position
-				local delta = tpos - pos
-				local dist = delta.Magnitude
+			local dist = (target.Position - self.Root.Position).Magnitude
+			local duration = dist / self.Speed
 
-				if dist < 0.05 then
-					self.Root.CFrame = target
-					break
-				end
+			local tweenInfo = TweenInfo.new(
+				duration,
+				self.EasingStyle,
+				self.EasingDirection
+			)
 
-				local dt = RunService.Heartbeat:Wait()
-				local step = self.Speed * dt
+			local tween = TweenService:Create(self.Root, tweenInfo, { CFrame = target })
+			self._currentTween = tween
+			tween:Play()
 
-				if step >= dist then
-					self.Root.CFrame = target
-				else
-					local dir = delta / dist
-					local newPos = pos + dir * step
-					self.Root.CFrame = CFrame.new(newPos, newPos + self.Root.CFrame.LookVector)
-				end
-			end
+			-- Wait for tween to finish (respects Pause/Resume via tween:Pause/Play)
+			tween.Completed:Wait()
+			self._currentTween = nil
 
+			if not self.Running then break end
+
+			-- Remove the visual segment for this waypoint
 			for _, visual in ipairs(self.Visuals) do
 				if visual.index == self.Index then
 					if visual.beam then
@@ -252,13 +259,17 @@ function EasyPath:Run()
 				if self.OnWaypointReached then
 					task.spawn(self.OnWaypointReached, self.Index, self)
 				end
+				-- Wait until resumed before advancing
+				while self.Paused and self.Running do
+					task.wait()
+				end
 			end
 
 			self.Index += 1
 		end
 
 		self:Stop()
-		
+
 		if self.AutoDestroy then
 			self:SmoothDestroy()
 		end
@@ -268,6 +279,11 @@ end
 function EasyPath:Stop()
 	self.Running = false
 	self.Paused = false
+
+	if self._currentTween then
+		self._currentTween:Cancel()
+		self._currentTween = nil
+	end
 
 	if self._hb then
 		self._hb:Disconnect()
@@ -285,52 +301,52 @@ end
 
 function EasyPath:SmoothDestroy()
 	local duration = self.SmoothDestroyDuration
-	
+
 	if self._hb then
 		self._hb:Disconnect()
 		self._hb = nil
 	end
-	
+
 	self._firstNode = nil
-	
+
 	local tweenInfo = TweenInfo.new(
 		duration,
 		Enum.EasingStyle.Sine,
 		Enum.EasingDirection.InOut
 	)
-	
+
 	local remainingVisuals = {}
 	for _, visual in ipairs(self.Visuals) do
 		if visual.beam and visual.beam.Parent then
 			table.insert(remainingVisuals, visual)
 		end
 	end
-	
+
 	local step = duration / math.max(#remainingVisuals, 1)
-	
+
 	for i, visual in ipairs(remainingVisuals) do
 		task.spawn(function()
 			task.wait((i - 1) * step * 0.5)
 			if visual.beam and visual.beam.Parent then
-				local tween = TweenService:Create(visual.beam, tweenInfo, {Width0 = 0, Width1 = 0})
+				local tween = TweenService:Create(visual.beam, tweenInfo, { Width0 = 0, Width1 = 0 })
 				tween:Play()
 			end
 		end)
 	end
-	
+
 	task.wait(duration)
-	
+
 	self:Destroy()
 end
 
 function EasyPath:Destroy()
 	self:Stop()
-	
+
 	if self._diedConnection then
 		self._diedConnection:Disconnect()
 		self._diedConnection = nil
 	end
-	
+
 	self:ClearVisuals()
 	if self.Folder then
 		self.Folder:Destroy()
